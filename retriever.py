@@ -228,15 +228,12 @@ def ask(question):
 
 
 # ── TEST IT ───────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
-    # Test with these questions — one from each document
     questions = [
-        "What is the Digital Upside Return for this notes?",
+        "What is the Digital Upside Return for the HSBC notes?",
         "What are the tax benefits of municipal bonds?",
         "What happens if the S&P 500 drops more than 10%?"
     ]
-
     for question in questions:
         ask(question)
         print("\n" + "═" * 60 + "\n")
