@@ -4,6 +4,8 @@ import base64
 import tempfile
 import numpy as np
 import streamlit as st
+from pypdf import PdfReader
+import io
 
 st.set_page_config(
     page_title="Document Assistant",
@@ -67,12 +69,6 @@ st.markdown("""
     .stButton button:hover {
         background: #1d4ed8 !important;
     }
-    .process-btn button {
-        background: #059669 !important;
-    }
-    .process-btn button:hover {
-        background: #047857 !important;
-    }
     #MainMenu, footer, header { visibility: hidden; }
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: #0e0e0e; }
@@ -115,11 +111,21 @@ def pdf_to_base64_url(pdf_bytes):
     return f"data:application/pdf;base64,{b64}"
 
 
+def get_page_count(pdf_bytes):
+    """Get page count without crashing if it fails."""
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        return len(reader.pages)
+    except Exception:
+        return 0
+
+
 def process_pdf(uploaded_file):
     """
     Extract → Chunk → Embed → Store in memory.
-    No files written to disk permanently.
-    Lives in session state only.
+    Nothing written to disk permanently.
+    Everything lives in session state only.
+    Disappears when session ends.
     """
     import faiss
 
@@ -130,13 +136,16 @@ def process_pdf(uploaded_file):
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
 
-    # Step 1 — Extract
+    # Step 1 — Extract text
     with st.spinner("📖 Extracting text from PDF..."):
         pages = extract_text_from_pdf(tmp_path)
     os.unlink(tmp_path)
 
     if not pages:
-        st.error("Could not extract text from this PDF.")
+        st.error(
+            "Could not extract text from this PDF. "
+            "Make sure it's not a scanned image PDF."
+        )
         return False
 
     # Step 2 — Chunk
@@ -147,21 +156,21 @@ def process_pdf(uploaded_file):
             overlap=50
         )
 
-    # Step 3 — Embed via Bedrock
+    # Step 3 — Embed via Bedrock Titan
     with st.spinner(
-        f"🔮 Embedding {len(chunks)} chunks via AWS Bedrock "
-        f"(this takes ~{len(chunks)//10 + 1} seconds)..."
+        f"🔮 Embedding {len(chunks)} chunks via "
+        f"AWS Bedrock (~{max(1, len(chunks)//10)} sec)..."
     ):
         embeddings = embed_chunks(chunks)
 
-    # Step 4 — Build in-memory FAISS index
+    # Step 4 — Build FAISS index in memory
     with st.spinner("🗄️ Building search index..."):
         dimension = len(embeddings[0])
         vectors = np.array(embeddings).astype("float32")
         index = faiss.IndexFlatL2(dimension)
         index.add(vectors)
 
-    # Store in session state
+    # Persist in session state
     st.session_state.doc_index = index
     st.session_state.doc_chunks = chunks
     st.session_state.doc_ready = True
@@ -172,8 +181,8 @@ def process_pdf(uploaded_file):
 
 def run_rag(question):
     """
-    Full pipeline:
-    Embed question → Search index → Build prompt → Get answer
+    Full RAG pipeline:
+    Embed question → Search FAISS → Build prompt → Claude answer
     """
     if not st.session_state.doc_ready:
         return (
@@ -181,10 +190,8 @@ def run_rag(question):
             []
         )
 
-    # Embed question
     q_vec = embed_question(question)
 
-    # Find relevant chunks
     chunks = find_relevant_chunks(
         q_vec,
         st.session_state.doc_index,
@@ -195,7 +202,6 @@ def run_rag(question):
     if not chunks:
         return "No relevant content found.", []
 
-    # Build prompt and get answer
     prompt = build_prompt(question, chunks)
     answer = get_answer(prompt)
 
@@ -211,26 +217,13 @@ st.markdown("""
     border-radius: 10px;
     margin-bottom: 20px;
     border: 1px solid #1f2937;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
 ">
-    <div>
-        <span style="
-            font-size: 20px;
-            font-weight: 700;
-            color: #e2e8f0;
-        ">
-            📄 Document Assistant
-        </span>
-        <span style="
-            font-size: 12px;
-            color: #6b7280;
-            margin-left: 12px;
-        ">
-            Upload any PDF · Ask anything · Powered by AWS Bedrock
-        </span>
-    </div>
+    <span style="font-size:20px; font-weight:700; color:#e2e8f0;">
+        📄 Document Assistant
+    </span>
+    <span style="font-size:12px; color:#6b7280; margin-left:12px;">
+        Upload any PDF · Ask anything · AWS Bedrock + RAG
+    </span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -239,23 +232,24 @@ st.markdown("""
 left, right = st.columns([1, 1.1], gap="large")
 
 # ════════════════════════════════════════
-# LEFT COLUMN — CHAT
+# LEFT — CHAT
 # ════════════════════════════════════════
 
 with left:
 
-    # ── Document status ──
+    # ── Document status bar ──
     if st.session_state.doc_ready:
         st.markdown(f"""
         <div class="status-box">
             <span style="color:#10b981; font-weight:600;">
                 ✅ Document ready
             </span>
-            <span style="color:#6b7280; margin-left:8px;">
+            <span style="color:#6b7280; margin-left:8px;
+                font-size:12px;">
                 {st.session_state.pdf_name}
             </span>
             <br>
-            <span style="color:#4b5563; font-size:12px;">
+            <span style="color:#4b5563; font-size:11px;">
                 {st.session_state.chunk_count} chunks indexed
                 · Ask anything below
             </span>
@@ -276,7 +270,7 @@ with left:
 
     st.markdown("---")
 
-    # ── Chat history ──
+    # ── Chat messages ──
     if not st.session_state.chat_history:
         st.markdown("""
         <div style="
@@ -286,59 +280,57 @@ with left:
             border-radius: 12px;
             color: #374151;
         ">
-            <div style="font-size: 40px;">💬</div>
+            <div style="font-size:40px;">💬</div>
             <div style="
-                font-size: 14px;
-                color: #6b7280;
-                margin-top: 12px;
+                font-size:14px;
+                color:#6b7280;
+                margin-top:12px;
             ">
                 Upload a document and start asking questions
             </div>
             <div style="
-                font-size: 12px;
-                color: #374151;
-                margin-top: 16px;
-                line-height: 2;
+                font-size:12px;
+                color:#374151;
+                margin-top:16px;
+                line-height:2;
             ">
                 Works with any PDF —<br>
                 Financial docs · Scriptures ·
-                Research papers · Contracts · Books
+                Research papers · Books · Contracts
             </div>
         </div>
         """, unsafe_allow_html=True)
 
     else:
-        # Render chat messages
         for msg in st.session_state.chat_history:
             if msg["role"] == "user":
                 st.markdown(f"""
                 <div class="user-bubble">
                     <div style="
-                        font-size: 10px;
-                        color: #60a5fa;
-                        font-weight: 700;
-                        margin-bottom: 5px;
-                        letter-spacing: 1px;
+                        font-size:10px;
+                        color:#60a5fa;
+                        font-weight:700;
+                        margin-bottom:5px;
+                        letter-spacing:1px;
                     ">YOU</div>
                     {msg["content"]}
                 </div>
                 """, unsafe_allow_html=True)
-
             else:
                 st.markdown(f"""
                 <div class="bot-bubble">
                     <div style="
-                        font-size: 10px;
-                        color: #34d399;
-                        font-weight: 700;
-                        margin-bottom: 5px;
-                        letter-spacing: 1px;
+                        font-size:10px;
+                        color:#34d399;
+                        font-weight:700;
+                        margin-bottom:5px;
+                        letter-spacing:1px;
                     ">ASSISTANT</div>
                     {msg["content"]}
                 </div>
                 """, unsafe_allow_html=True)
 
-                # Source pills
+                # Source pills below each answer
                 if msg.get("sources"):
                     pills = ""
                     for s in msg["sources"]:
@@ -349,8 +341,8 @@ with left:
                             else "🔴"
                         )
                         name = (
-                            s["source"][:28] + "..."
-                            if len(s["source"]) > 28
+                            s["source"][:25] + "..."
+                            if len(s["source"]) > 25
                             else s["source"]
                         )
                         pills += f"""
@@ -358,14 +350,14 @@ with left:
                             {rel} {name} · p{s['page']}
                         </span>"""
                     st.markdown(
-                        f"<div style='margin:6px 0 12px 0'>"
+                        f"<div style='margin:4px 0 12px 0'>"
                         f"{pills}</div>",
                         unsafe_allow_html=True
                     )
 
     st.markdown("---")
 
-    # ── Input + buttons ──
+    # ── Question input ──
     question = st.text_input(
         "question",
         placeholder="Ask anything about your document...",
@@ -382,13 +374,12 @@ with left:
             key="ask_btn",
             disabled=not st.session_state.doc_ready
         )
-
     with col_clear:
         if st.button("🗑️", key="clear_btn"):
             st.session_state.chat_history = []
             st.rerun()
 
-    # ── Handle question ──
+    # ── Handle ask ──
     if ask_clicked and question.strip():
         st.session_state.chat_history.append({
             "role": "user",
@@ -412,16 +403,16 @@ with left:
         st.rerun()
 
 # ════════════════════════════════════════
-# RIGHT COLUMN — PDF UPLOAD + VIEWER
+# RIGHT — PDF UPLOAD + VIEWER
 # ════════════════════════════════════════
 
 with right:
     st.markdown("""
     <div style="
-        font-size: 15px;
-        font-weight: 700;
-        color: #e2e8f0;
-        margin-bottom: 12px;
+        font-size:15px;
+        font-weight:700;
+        color:#e2e8f0;
+        margin-bottom:12px;
     ">
         📂 Upload Document
     </div>
@@ -436,11 +427,10 @@ with right:
     )
 
     if uploaded:
-        # Store bytes in session state
+        # Reset state when new file is uploaded
         if uploaded.name != st.session_state.pdf_name:
             st.session_state.pdf_name = uploaded.name
             st.session_state.pdf_bytes = uploaded.getvalue()
-            # Reset doc state for new upload
             st.session_state.doc_ready = False
             st.session_state.doc_index = None
             st.session_state.doc_chunks = None
@@ -448,20 +438,18 @@ with right:
 
         # ── Process button ──
         if not st.session_state.doc_ready:
-            st.markdown('<div class="process-btn">', unsafe_allow_html=True)
             process_clicked = st.button(
                 "⚡ Process Document",
-                key="process_btn"
+                key="process_btn",
+                use_container_width=True
             )
-            st.markdown('</div>', unsafe_allow_html=True)
-
             if process_clicked:
                 success = process_pdf(uploaded)
                 if success:
                     st.success(
-                        f"✅ Ready! "
-                        f"{st.session_state.chunk_count} chunks indexed. "
-                        f"Ask questions on the left."
+                        f"✅ Ready — "
+                        f"{st.session_state.chunk_count} "
+                        f"chunks indexed. Ask questions on the left."
                     )
                     st.rerun()
         else:
@@ -475,28 +463,97 @@ with right:
                 "<div style='margin-top:12px;'></div>",
                 unsafe_allow_html=True
             )
-            try:
-                pdf_url = pdf_to_base64_url(
+
+            file_size_mb = len(
+                st.session_state.pdf_bytes
+            ) / (1024 * 1024)
+
+            # Small files — inline preview
+            if file_size_mb < 2:
+                try:
+                    pdf_url = pdf_to_base64_url(
+                        st.session_state.pdf_bytes
+                    )
+                    st.markdown(
+                        f'<iframe src="{pdf_url}" '
+                        f'width="100%" height="650" '
+                        f'style="border:1px solid #1f2937;'
+                        f'border-radius:8px;'
+                        f'background:#111827;">'
+                        f'</iframe>',
+                        unsafe_allow_html=True
+                    )
+                except Exception:
+                    st.info("Preview unavailable.")
+
+            # Large files — info card
+            else:
+                page_count = get_page_count(
                     st.session_state.pdf_bytes
                 )
-                st.markdown(
-                    f'<iframe src="{pdf_url}" '
-                    f'width="100%" height="650" '
-                    f'style="border:1px solid #1f2937;'
-                    f'border-radius:8px;'
-                    f'background:#111827;">'
-                    f'</iframe>',
-                    unsafe_allow_html=True
+                chunks_text = (
+                    f"<div style='margin-top:12px;"
+                    f"font-size:12px; color:#10b981;'>"
+                    f"✅ {st.session_state.chunk_count} "
+                    f"chunks indexed and searchable</div>"
+                    if st.session_state.doc_ready else ""
                 )
-            except Exception:
-                st.info(
-                    "📄 Document uploaded successfully. "
-                    "Preview not available for large files — "
-                    "but you can still ask questions about it."
+
+                st.markdown(f"""
+                <div style="
+                    background: #111827;
+                    border: 1px solid #1f2937;
+                    border-radius: 12px;
+                    padding: 40px 24px;
+                    text-align: center;
+                    margin-top: 8px;
+                ">
+                    <div style="font-size:52px;">📄</div>
+                    <div style="
+                        font-size:15px;
+                        font-weight:700;
+                        color:#e2e8f0;
+                        margin-top:14px;
+                        word-break: break-all;
+                    ">
+                        {st.session_state.pdf_name}
+                    </div>
+                    <div style="
+                        font-size:13px;
+                        color:#6b7280;
+                        margin-top:8px;
+                    ">
+                        {file_size_mb:.1f} MB
+                        {" · " + str(page_count) +
+                        " pages" if page_count else ""}
+                    </div>
+                    <div style="
+                        background: #1f2937;
+                        border-radius: 8px;
+                        padding: 10px 16px;
+                        margin-top: 16px;
+                        font-size: 12px;
+                        color: #9ca3af;
+                        line-height: 1.6;
+                    ">
+                        File too large for browser preview.<br>
+                        Document is fully indexed
+                        and ready for questions.
+                    </div>
+                    {chunks_text}
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.download_button(
+                    label="⬇️ Download to view locally",
+                    data=st.session_state.pdf_bytes,
+                    file_name=st.session_state.pdf_name,
+                    mime="application/pdf",
+                    use_container_width=True
                 )
 
     else:
-        # Empty state
+        # Empty state — no file uploaded yet
         st.markdown("""
         <div style="
             text-align: center;
@@ -506,20 +563,20 @@ with right:
             color: #374151;
             margin-top: 8px;
         ">
-            <div style="font-size: 48px;">📄</div>
+            <div style="font-size:52px;">📄</div>
             <div style="
-                font-size: 15px;
-                color: #6b7280;
-                margin-top: 14px;
-                font-weight: 600;
+                font-size:15px;
+                color:#6b7280;
+                margin-top:14px;
+                font-weight:600;
             ">
                 Drop any PDF here
             </div>
             <div style="
-                font-size: 12px;
-                color: #374151;
-                margin-top: 10px;
-                line-height: 2;
+                font-size:12px;
+                color:#374151;
+                margin-top:10px;
+                line-height:2;
             ">
                 Financial documents · Scriptures<br>
                 Research papers · Books · Contracts<br>
