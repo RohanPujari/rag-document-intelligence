@@ -98,24 +98,6 @@ def find_relevant_chunks(question_vector, index, chunks, top_k=3):
 # ── STEP 4: BUILD THE PROMPT ──────────────────────────────────────────────────
 
 def build_prompt(question, relevant_chunks):
-    """
-    Combines the retrieved chunks with the question into
-    a single prompt for Claude.
-    
-    The key instruction: "Answer ONLY using the context below"
-    
-    Why this matters:
-    Without this instruction Claude might answer from its 
-    general training knowledge — which could be outdated or 
-    wrong for this specific document.
-    
-    With this instruction Claude stays grounded in YOUR 
-    documents. If the answer isn't in the chunks, it says
-    "I don't know" instead of hallucinating.
-    
-    This is what makes RAG trustworthy for financial documents
-    where accuracy is critical.
-    """
     context = ""
     for i, chunk in enumerate(relevant_chunks):
         context += f"\n--- Source: {chunk['source']} | "
@@ -123,10 +105,20 @@ def build_prompt(question, relevant_chunks):
         context += chunk["text"]
         context += "\n"
 
-    prompt = f"""You are a financial document analyst. 
-Answer the question below using ONLY the context provided.
-If the answer is not in the context, say "I cannot find 
-this information in the provided documents."
+    prompt = f"""You are a financial document analyst
+specializing in structured notes and securities.
+
+Use the context below to answer the question.
+
+Important instructions:
+- Search through ALL context sections carefully
+- Map terminology: 
+  "Underlying" means "Reference Asset"
+  "Protection Percentage" means "Buffer Percentage"
+  "Protection type" means the note structure type
+- If a value appears anywhere in the context, extract it
+- For JSON requests return ONLY valid JSON, no extra text
+- Look for specific values like percentages, names, dates
 
 Context:
 {context}
@@ -141,25 +133,31 @@ Answer:"""
 # ── STEP 5: GET ANSWER FROM BEDROCK ──────────────────────────────────────────
 
 def get_answer(prompt):
-    """
-    Sends the prompt to Claude via AWS Bedrock and gets answer.
-    
-    We use Claude 3 Haiku — the fastest and cheapest Claude model.
-    Perfect for Q&A tasks where speed matters.
-    
-    For more complex reasoning or summarization you'd upgrade
-    to Claude 3 Sonnet or Claude 3 Opus.
-    
-    max_tokens=500 — limits the response length
-    Enough for a detailed answer, not so much it rambles.
-    """
     bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
+
+    # System prompt tells Claude how to behave
+    # before it even sees the user's question
+    system_prompt = """You are a financial document analyst 
+specializing in structured notes, bonds, and securities.
+
+When answering questions:
+- Use ONLY the context provided
+- If the user asks for JSON format, always return valid JSON
+- Map common financial terms to their equivalents:
+  "Underlying" = "Reference Asset"
+  "Protection Percentage" = "Buffer Percentage"  
+  "Protection type" = type of note structure
+  "Issuer" = the company that issued the note
+- If you cannot find exact information, look for equivalent terms
+- Never make up information not in the context
+- For JSON requests, return clean JSON with no extra text"""
 
     response = bedrock.invoke_model(
         modelId="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         body=json.dumps({
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 500,
+            "system": system_prompt,
             "messages": [
                 {
                     "role": "user",
