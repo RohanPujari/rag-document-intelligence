@@ -1,136 +1,116 @@
-# rag-document-intelligence
-RAG pipeline using AWS Bedrock and FAISS for financial document analysis
+Financial Document Intelligence Platform
+AWS Bedrock + FAISS + Claude + Streamlit
+A production-deployed RAG pipeline that transforms dense financial documents into instant, queryable intelligence. Built for financial analysts who need answers fast — not another PDF to read.
+🔗 Live Demo · GitHub
 
-# RAG Document Intelligence Pipeline
-### AWS Bedrock + FAISS + Streamlit
+What It Does
+Upload any financial document and get:
 
-A production-style Retrieval Augmented Generation (RAG) pipeline 
-for financial document analysis. Built to replicate real-world 
-document intelligence workflows for financial analysts.
+Auto-detected document type — 10-K, 10-Q, 13F, Municipal Bond, Structured Note
+Instant dashboard — key fields extracted automatically (revenue, net income, EPS, holdings, yield, etc.)
+Chat interface — ask anything in plain English, get answers grounded in the document
+Source attribution — every answer shows exactly which page it came from
+JSON → Table rendering — structured data renders as clean tables automatically
 
----
 
-## What It Does
+Supported Document Types
+TypeAuto-Extracted Fields📊 10-K Annual ReportRevenue, Net Income, EPS, Total Assets, Key Risks📋 10-Q Quarterly ReportQuarterly Revenue, Net Income, YoY Change, Guidance📑 Form 13FTop Holdings, Market Value, New/Closed Positions🏛️ Municipal BondYield, Maturity, Credit Rating, Tax Status📄 Structured NoteUnderlying, Buffer %, Digital Return, Maturity
 
-Financial analysts spend hours manually reading through dense 
-documents — prospectuses, bond offerings, fund filings. This 
-pipeline automates that by letting analysts ask natural language 
-questions and getting precise answers grounded in the actual documents.
-
----
-
-## Architecture
-```
-PDF Documents (prospectus, bond filings)
+Architecture
+User uploads PDF
         ↓
-Text Extraction (PyPDF)
+PDF → Markdown conversion (pymupdf4llm)
         ↓
-Chunking (500 chars, 50 overlap)
+Intelligent chunking (800 chars, 100 overlap)
         ↓
-Embedding (Amazon Titan Embeddings V2 via Bedrock)
+Parallel embedding via Amazon Titan Embeddings V2
+(3 concurrent Bedrock calls with retry logic)
         ↓
-Vector Store (FAISS — local index)
+FAISS vector index built in memory
+MD5 hash cached to disk (same doc = instant reload)
         ↓
-User Question → Embed → Similarity Search → Top 3 Chunks
+Auto-classification (Claude detects doc type)
         ↓
-AWS Bedrock (Claude) → Grounded Answer
+Schema extraction (targeted fields per doc type)
         ↓
-Streamlit UI
-```
+User asks question
+        ↓
+Question embedded → FAISS similarity search → Top 5 chunks
+        ↓
+Claude (via Bedrock) generates grounded answer
+        ↓
+JSON responses auto-rendered as tables
 
----
+Tech Stack
+LayerTechnologyWhyLLMAWS Bedrock — Claude Haiku 4.5Latest model, inference profile routingEmbeddingsAmazon Titan Embeddings V2AWS-native, no external API keys, 1536-dimVector StoreFAISS (in-memory)Sub-millisecond search, zero infrastructure costPDF Processingpymupdf4llm + pypdfMarkdown conversion preserves tables and structureClassificationClaude via BedrockAuto-detects doc type from first 5 chunksExtractionClaude via BedrockSchema-driven extraction per document typeCachingMD5 hash + pickleSame document reloads instantly from diskUIStreamlitDeployed on Streamlit CloudAWS SDKboto3Parallel embedding calls with throttle retry
 
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| LLM | AWS Bedrock (Claude 3 Haiku) |
-| Embeddings | Amazon Titan Embeddings V2 |
-| Vector Store | FAISS |
-| PDF Processing | PyPDF |
-| UI | Streamlit |
-| AWS SDK | boto3 |
-
----
-
-## Project Structure
-```
+Project Structure
 rag-document-intelligence/
-├── data/                  # PDF documents (not tracked in git)
-├── ingest.py              # Extract → Chunk → Embed → Store
-├── retriever.py           # Question → Search → Answer
-├── app.py                 # Streamlit UI
-└── .env                   # AWS credentials (not tracked in git)
-```
+├── app.py              # Main Streamlit app — upload, chat, dashboard
+├── classifier.py       # Auto-detects document type using Claude
+├── extractor.py        # Schema-based field extraction per doc type
+├── retriever.py        # FAISS search + Claude answer generation
+├── ingest.py           # Standalone ingestion pipeline (legacy)
+├── requirements.txt    # Python dependencies
+├── .streamlit/
+│   └── config.toml     # Streamlit server config
+└── .env                # AWS credentials (not tracked in git)
 
----
+Key Technical Decisions
+Markdown conversion before chunking
+Raw PDF extraction mangles tables — numbers lose context. Converting to markdown first preserves table structure, headers, and section boundaries. Financial documents are full of tables; this matters.
+Parallel embedding with throttle retry
+Sequential Bedrock calls take 2+ minutes for large documents. Parallel calls with 3 workers and exponential backoff on throttling bring this to under 30 seconds for most documents.
+MD5 hash caching
+Same document uploaded twice never gets re-embedded. The hash fingerprints the file, cached embeddings load from disk instantly. Critical for analyst workflows where the same filings get reviewed repeatedly.
+Per-document-type system prompts
+A 10-K and a 13F use completely different terminology for similar concepts. Generic prompts fail. Each document type has a targeted system prompt with terminology mappings — "Underlying" maps to "Reference Asset" for structured notes, "Holdings" maps to "Securities held" for 13F, etc.
+In-memory FAISS vs managed vector DB
+For a single-session document analysis tool, local FAISS gives sub-millisecond search with zero cost. For multi-user production scale this migrates to Amazon OpenSearch.
 
-## Key Technical Decisions
+Setup
+bashgit clone https://github.com/RohanPujari/rag-document-intelligence
+cd rag-document-intelligence
+pip install -r requirements.txt
+Add AWS credentials to .env:
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
+AWS_DEFAULT_REGION=us-east-1
+Run locally:
+bashstreamlit run app.py
 
-**Chunk size: 500 characters, Overlap: 50 characters**
-Financial documents have dense information per sentence. 
-500 characters captures enough context per chunk while 
-keeping Bedrock payload small. 50 character overlap prevents 
-key sentences from being split across chunk boundaries.
+Sample Questions by Document Type
+10-Q (Starbucks):
 
-**Why FAISS over a managed vector DB?**
-For a single-user document analysis tool, local FAISS gives 
-sub-millisecond search with zero infrastructure cost. 
-For production multi-user scale, this would migrate to 
-Amazon OpenSearch or Pinecone.
+"What was revenue and profit this quarter?"
+"How did this quarter compare to last year?"
+"Extract quarterly financials as a table"
 
-**Why Amazon Titan Embeddings?**
-AWS-native — no external API keys, IAM role controls access, 
-consistent latency within the AWS network. 1536-dimension 
-vectors give high semantic resolution for financial terminology.
+Structured Note (HSBC):
 
----
+"What is the Digital Upside Return?"
+"What happens if the S&P 500 drops more than 10%?"
+"Extract underlying, protection % and return as table"
 
-## Setup
+Municipal Bond:
 
-1. Clone the repo
-2. Install dependencies:
-```
-   pip install boto3 pypdf faiss-cpu streamlit python-dotenv
-```
-3. Add AWS credentials to `.env`:
-```
-   AWS_ACCESS_KEY_ID=your_key
-   AWS_SECRET_ACCESS_KEY=your_secret
-   AWS_DEFAULT_REGION=us-east-1
-```
-4. Add PDF files to `data/` folder
-5. Run ingestion:
-```
-   python ingest.py
-```
-6. Launch UI:
-```
-   streamlit run app.py
-```
+"What is the credit rating and tax status?"
+"What is the bond type, rate, and maturity?"
 
----
 
-## Sample Questions
+Validation Results
+Tested against Starbucks 10-Q (Q2 FY2024):
+FieldExtractedActualMatchCompany NameStarbucks CorporationStarbucks Corporation✅QuarterQ2 2024Q2 FY2024✅Revenue$8,563.0M$8,563.0M✅Net Income$772.4M$772.4M✅EPS$0.68$0.68✅Operating Income$1,098.9M$1,098.9M✅Operating Expenses$7,532.1M$7,532.1M✅YoY Revenue Change-1.8%-1.8%✅
+8/8 core financial fields correct.
 
-- "What are the risk factors associated with these notes?"
-- "What is the Digital Upside Return and when does it apply?"
-- "What are the tax implications of investing in municipal bonds?"
-- "What happens if the S&P 500 drops more than 10%?"
+What's Next (V2)
 
----
+RAG-based extraction — use similarity search to find relevant chunks per field instead of first N chunks — eliminates the "answer on page 50" problem
+Cross-document comparison — compare two filings side by side
+Agentic news layer — agent fetches financial news, RAG answers questions across articles + filings
+MLflow experiment tracking — log every query, latency, and relevance score
+Amazon OpenSearch — replace FAISS for multi-user production scale
+AWS Lambda + API Gateway — decouple frontend from Bedrock calls
 
-## What I'd Add in V2
 
-- **Reranking** — retrieve top 20 chunks, cross-encoder rerank to top 5
-- **Section-aware chunking** — detect document sections and chunk by section boundary
-- **AWS Lambda + API Gateway** — replace direct boto3 calls with serverless API
-- **Amazon OpenSearch** — replace local FAISS for multi-user production scale
-- **MLflow** — track embedding experiments and retrieval quality metrics
-- **RAGAS evaluation** — measure retrieval precision and answer faithfulness
-
----
-
-*Built as part of AWS MLOps portfolio — demonstrates end-to-end 
-RAG pipeline with production-grade AWS services.*
-```
+Built as part of an AWS MLOps portfolio. Demonstrates end-to-end RAG pipeline with production-grade AWS services, deployed and live.
