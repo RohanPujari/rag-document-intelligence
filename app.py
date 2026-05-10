@@ -374,13 +374,14 @@ with col_viewer:
 
         if st.session_state.pdf_bytes:
             mb = len(st.session_state.pdf_bytes) / (1024 * 1024)
-            if mb < 2:
-                try:
-                    st.markdown(f'<iframe src="{pdf_to_base64_url(st.session_state.pdf_bytes)}" width="100%" height="580" style="border:1px solid #1f2937;border-radius:8px;"></iframe>', unsafe_allow_html=True)
-                except Exception:
-                    st.info("Preview unavailable.")
-            else:
-                st.markdown(f'<div style="background:#111827;border:1px solid #1f2937;border-radius:10px;padding:24px;text-align:center;margin-top:8px;"><div style="font-size:36px;">📄</div><div style="font-size:13px;color:#e2e8f0;margin-top:8px;font-weight:600;">{st.session_state.pdf_name}</div><div style="font-size:11px;color:#6b7280;margin-top:4px;">{mb:.1f} MB · Too large for preview</div></div>', unsafe_allow_html=True)
-                st.download_button("⬇️ Download to view locally", data=st.session_state.pdf_bytes, file_name=st.session_state.pdf_name, mime="application/pdf", use_container_width=True)
+            # if mb < 2:
+            #     try:
+            #         st.markdown(f'<iframe src="{pdf_to_base64_url(st.session_state.pdf_bytes)}" width="100%" height="580" style="border:1px solid #1f2937;border-radius:8px;"></iframe>', unsafe_allow_html=True)
+            #     except Exception:
+            #         st.info("Preview unavailable.")
+            # else:
+            #     st.markdown(f'<div style="background:#111827;border:1px solid #1f2937;border-radius:10px;padding:24px;text-align:center;margin-top:8px;"><div style="font-size:36px;">📄</div><div style="font-size:13px;color:#e2e8f0;margin-top:8px;font-weight:600;">{st.session_state.pdf_name}</div><div style="font-size:11px;color:#6b7280;margin-top:4px;">{mb:.1f} MB · Too large for preview</div></div>', unsafe_allow_html=True)
+            #     st.download_button("⬇️ Download to view locally", data=st.session_state.pdf_bytes, file_name=st.session_state.pdf_name, mime="application/pdf", use_container_width=True)
+            st.info("📄 Document processed and ready. Ask questions on the left.")
     else:
         st.markdown('<div style="text-align:center;padding:80px 20px;border:2px dashed #1f2937;border-radius:12px;color:#374151;margin-top:8px;"><div style="font-size:48px;">📄</div><div style="font-size:14px;color:#6b7280;margin-top:12px;font-weight:600;">Drop any financial PDF here</div><div style="font-size:12px;color:#374151;margin-top:8px;line-height:2;">10-K · 10-Q · 13F · Municipal Bonds<br>Structured Notes · Any financial document</div></div>', unsafe_allow_html=True)
